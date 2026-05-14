@@ -42,10 +42,8 @@ linter:
     close_sinks: true
 
     # --- Ölü kod / gereksiz import (knip’in bir kısmı) ---
-    unnecessary_import: true
     unnecessary_library_directive: true
     unnecessary_null_aware_assignments: true
-    unused_element: true
 
     # --- Okunabilirlik + yanlış API kullanımını azaltma ---
     prefer_final_locals: true
