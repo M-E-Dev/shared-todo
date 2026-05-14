@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../core/config/env_config.dart';
 import '../features/auth/domain/auth_user.dart';
 import '../features/auth/presentation/auth_notifier.dart';
+import '../features/settings/settings_sheet.dart';
 import '../features/todo/domain/shared_list_repository.dart';
 import '../features/todo/domain/todo_repository.dart';
 import '../features/todo/presentation/calendar_screen.dart';
@@ -187,7 +188,8 @@ final class _HomeShellState extends State<_HomeShell> {
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (_) => _SettingsSheet(
+      useSafeArea: true,
+      builder: (_) => SettingsSheet(
         themeNotifier: AppScope.read(context).themeNotifier,
       ),
     );
@@ -227,218 +229,6 @@ final class _HomeShellState extends State<_HomeShell> {
           ),
         ],
       ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Genel Ayarlar bottom sheet
-// ---------------------------------------------------------------------------
-
-class _SettingsSheet extends StatelessWidget {
-  const _SettingsSheet({required this.themeNotifier});
-
-  final AppThemeNotifier themeNotifier;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = themeNotifier.current;
-    return Container(
-      margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-      decoration: BoxDecoration(
-        color: c.card,
-        borderRadius: BorderRadius.circular(24),
-      ),
-      child: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              // Tutma çubuğu
-              Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: c.divider,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: <Widget>[
-                  Icon(Icons.settings_rounded, color: c.accent, size: 22),
-                  const SizedBox(width: 10),
-                  Text(
-                    'Ayarlar',
-                    style: TextStyle(
-                      color: c.textPrimary,
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const Spacer(),
-                  IconButton(
-                    icon: Icon(Icons.close, color: c.textSecondary, size: 20),
-                    onPressed: () => Navigator.of(context).pop(),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Renk Teması',
-                style: TextStyle(
-                  color: c.textSecondary,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 0.8,
-                ),
-              ),
-              const SizedBox(height: 12),
-              // Light presetler
-              _ThemeGroupRow(
-                label: 'Açık',
-                presets: AppThemePreset.all
-                    .where((AppThemePreset p) => !p.isDark)
-                    .toList(),
-                current: c,
-                onSelect: (AppThemePreset p) {
-                  themeNotifier.apply(p);
-                },
-              ),
-              const SizedBox(height: 12),
-              // Dark presetler
-              _ThemeGroupRow(
-                label: 'Koyu',
-                presets: AppThemePreset.all
-                    .where((AppThemePreset p) => p.isDark)
-                    .toList(),
-                current: c,
-                onSelect: (AppThemePreset p) {
-                  themeNotifier.apply(p);
-                },
-              ),
-              const SizedBox(height: 20),
-              const Divider(),
-              const SizedBox(height: 12),
-              // Hakkında / notlar
-              Row(
-                children: <Widget>[
-                  Icon(Icons.info_outline, color: c.textSecondary, size: 16),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Tema tercihi bu oturumda geçerlidir. '
-                      'Uygulama yeniden açıldığında sıfırlanır.',
-                      style: TextStyle(
-                        color: c.textSecondary,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ThemeGroupRow extends StatelessWidget {
-  const _ThemeGroupRow({
-    required this.label,
-    required this.presets,
-    required this.current,
-    required this.onSelect,
-  });
-
-  final String label;
-  final List<AppThemePreset> presets;
-  final AppThemePreset current;
-  final ValueChanged<AppThemePreset> onSelect;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        Text(
-          label,
-          style: TextStyle(
-            color: current.textSecondary,
-            fontSize: 11,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          children: presets.map((AppThemePreset p) {
-            final bool selected = p == current;
-            return GestureDetector(
-              onTap: () => onSelect(p),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 150),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 8,
-                ),
-                decoration: BoxDecoration(
-                  color: selected
-                      ? p.accent.withValues(alpha: 0.15)
-                      : p.bg,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: selected
-                        ? p.accent
-                        : p.divider,
-                    width: selected ? 2 : 1,
-                  ),
-                  boxShadow: selected
-                      ? <BoxShadow>[
-                          BoxShadow(
-                            color: p.accent.withValues(alpha: 0.25),
-                            blurRadius: 8,
-                          ),
-                        ]
-                      : null,
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    Text(p.emoji, style: const TextStyle(fontSize: 14)),
-                    const SizedBox(width: 6),
-                    Text(
-                      p.name,
-                      style: TextStyle(
-                        color: p.textPrimary,
-                        fontSize: 12,
-                        fontWeight: selected
-                            ? FontWeight.w700
-                            : FontWeight.normal,
-                      ),
-                    ),
-                    if (selected) ...<Widget>[
-                      const SizedBox(width: 4),
-                      Icon(
-                        Icons.check_circle_rounded,
-                        color: p.accent,
-                        size: 14,
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            );
-          }).toList(),
-        ),
-      ],
     );
   }
 }

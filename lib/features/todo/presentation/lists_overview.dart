@@ -68,6 +68,15 @@ final class _ListsOverviewState extends State<ListsOverview> {
 
   RealtimeChannel? _realtimeChannel;
 
+  // Realtime burst koruması ve yarış kilidi.
+  Timer? _refreshDebounce;
+  bool _refreshInFlight = false;
+  bool _pendingRefresh = false;
+
+  // Sadece belirli listelerin todo'larını tazelemek için bekleyen kümeleme.
+  Timer? _partialReloadDebounce;
+  final Set<String> _pendingListIds = <String>{};
+
   @override
   void initState() {
     super.initState();
@@ -79,6 +88,8 @@ final class _ListsOverviewState extends State<ListsOverview> {
 
   @override
   void dispose() {
+    _refreshDebounce?.cancel();
+    _partialReloadDebounce?.cancel();
     _realtimeChannel?.unsubscribe();
     super.dispose();
   }
@@ -87,10 +98,27 @@ final class _ListsOverviewState extends State<ListsOverview> {
   // Veri yükleme — tüm liste + todo verisi tek yerden
   // -----------------------------------------------------------------------
 
+  /// Realtime/UI tarafından tetiklenen debounce'lu tam refresh.
+  void _scheduleFullRefresh() {
+    _refreshDebounce?.cancel();
+    _refreshDebounce = Timer(const Duration(milliseconds: 300), () {
+      if (_refreshInFlight) {
+        _pendingRefresh = true;
+      } else {
+        unawaited(_refresh());
+      }
+    });
+  }
+
   Future<void> _refresh() async {
     if (!mounted) {
       return;
     }
+    if (_refreshInFlight) {
+      _pendingRefresh = true;
+      return;
+    }
+    _refreshInFlight = true;
     setState(() {
       _busy = true;
       _error = null;
@@ -119,35 +147,94 @@ final class _ListsOverviewState extends State<ListsOverview> {
         map[lists[i].id] = _sorted(results[i], lists[i].sortDirection);
       }
 
-      // Rozet hesapla: daha önce görülmüş listeler için artan sayı = yeni todo
-      final Map<String, int> newSeenCounts = <String, int>{};
+      // Rozet: bilinen listeler için son görülen değeri koru, yeniler için "görülmüş" say.
+      final Map<String, int> nextSeen = <String, int>{};
       for (final SharedList l in lists) {
-        newSeenCounts[l.id] = _lastSeenCounts.containsKey(l.id)
-            ? _lastSeenCounts[l.id]! // Önceki değeri koru; kullanıcı açınca güncellenir
-            : (map[l.id]?.length ?? 0); // İlk görüşte mevcut sayıyı "görülmüş" say
+        nextSeen[l.id] = _lastSeenCounts[l.id] ?? (map[l.id]?.length ?? 0);
       }
       _lastSeenCounts
         ..clear()
-        ..addAll(newSeenCounts);
+        ..addAll(nextSeen);
 
       setState(() {
         _lists = lists;
         _todosMap = map;
+        _busy = false;
       });
     } on AppException catch (e) {
-      if (!mounted) {
-        return;
-      }
-      setState(() => _error = e.message);
-    } on Object catch (e) {
-      if (!mounted) {
-        return;
-      }
-      setState(() => _error = e.toString());
-    } finally {
       if (mounted) {
-        setState(() => _busy = false);
+        setState(() {
+          _error = e.message;
+          _busy = false;
+        });
       }
+    } on Object catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.toString();
+          _busy = false;
+        });
+      }
+    } finally {
+      _refreshInFlight = false;
+      if (_pendingRefresh) {
+        _pendingRefresh = false;
+        _scheduleFullRefresh();
+      }
+    }
+  }
+
+  /// Tek bir listenin todo'larını yeniden çek (tam refresh yapmadan).
+  void _scheduleListReload(String listId) {
+    _pendingListIds.add(listId);
+    _partialReloadDebounce?.cancel();
+    _partialReloadDebounce = Timer(const Duration(milliseconds: 250), () {
+      final Set<String> ids = Set<String>.from(_pendingListIds);
+      _pendingListIds.clear();
+      unawaited(_reloadListsTodos(ids));
+    });
+  }
+
+  Future<void> _reloadListsTodos(Set<String> listIds) async {
+    if (!mounted || listIds.isEmpty) {
+      return;
+    }
+    try {
+      final scope = AppScope.read(context);
+      // Listede artık yok olan id'leri atla (silinmiş olabilir → full refresh yapacağız).
+      final Set<String> existing = listIds
+          .where((String id) => _lists.any((SharedList l) => l.id == id))
+          .toSet();
+      if (existing.isEmpty) {
+        _scheduleFullRefresh();
+        return;
+      }
+      final List<MapEntry<String, List<TodoItem>>> results = await Future.wait(
+        existing.map(
+          (String id) async => MapEntry<String, List<TodoItem>>(
+            id,
+            await scope.todoRepository.fetchTodos(listId: id),
+          ),
+        ),
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        for (final MapEntry<String, List<TodoItem>> e in results) {
+          final SharedList? list = _lists.cast<SharedList?>().firstWhere(
+                (SharedList? l) => l?.id == e.key,
+                orElse: () => null,
+              );
+          if (list != null) {
+            _todosMap[e.key] = _sorted(e.value, list.sortDirection);
+          }
+        }
+      });
+    } on AppException catch (_) {
+      // Realtime tetikli — sessizce geç; bir sonraki refresh düzeltir.
+    } on Object catch (_) {
+      // sessiz
     }
   }
 
@@ -184,8 +271,9 @@ final class _ListsOverviewState extends State<ListsOverview> {
             schema: 'public',
             table: 'lists',
             callback: (PostgresChangePayload _) {
+              // Liste meta/ekleme/silme değişimi → debounced full refresh.
               if (mounted) {
-                unawaited(_refresh());
+                _scheduleFullRefresh();
               }
             },
           )
@@ -193,9 +281,16 @@ final class _ListsOverviewState extends State<ListsOverview> {
             event: PostgresChangeEvent.all,
             schema: 'public',
             table: 'todos',
-            callback: (PostgresChangePayload _) {
-              if (mounted) {
-                unawaited(_refresh());
+            callback: (PostgresChangePayload payload) {
+              if (!mounted) {
+                return;
+              }
+              // Sadece etkilenen listeyi yeniden yükle (N+1 yerine 1 sorgu).
+              final String? listId = _listIdFromPayload(payload);
+              if (listId == null) {
+                _scheduleFullRefresh();
+              } else {
+                _scheduleListReload(listId);
               }
             },
           )
@@ -203,6 +298,18 @@ final class _ListsOverviewState extends State<ListsOverview> {
     } on Object catch (_) {
       // Realtime opsiyonel; bağlantı yoksa sessizce geç.
     }
+  }
+
+  String? _listIdFromPayload(PostgresChangePayload payload) {
+    final Map<String, dynamic> newRow = payload.newRecord;
+    if (newRow.isNotEmpty && newRow['list_id'] is String) {
+      return newRow['list_id'] as String;
+    }
+    final Map<String, dynamic> oldRow = payload.oldRecord;
+    if (oldRow.isNotEmpty && oldRow['list_id'] is String) {
+      return oldRow['list_id'] as String;
+    }
+    return null;
   }
 
   // -----------------------------------------------------------------------
@@ -361,6 +468,9 @@ final class _ListsOverviewState extends State<ListsOverview> {
                                       rowCount: _rowsFor(list.id),
                                       badgeCount: _pendingBadges[list.id] ?? 0,
                                       c: c,
+                                      cardOpacity: AppScope.read(context)
+                                          .themeNotifier
+                                          .effectiveCardOpacity,
                                       onTap: () => _openDetail(list),
                                       onSettings: () => _openSettings(list),
                                       onLongPress: () =>
@@ -577,6 +687,7 @@ class _ListCard extends StatelessWidget {
     required this.rowCount,
     required this.badgeCount,
     required this.c,
+    required this.cardOpacity,
     required this.onTap,
     required this.onSettings,
     required this.onLongPress,
@@ -588,6 +699,7 @@ class _ListCard extends StatelessWidget {
   final int rowCount;
   final int badgeCount; // 0 = rozet yok
   final AppThemePreset c;
+  final double cardOpacity; // 0.30 - 1.0
   final VoidCallback onTap;
   final VoidCallback onSettings;
   final VoidCallback onLongPress;
@@ -610,7 +722,7 @@ class _ListCard extends StatelessWidget {
       child: Container(
         height: _totalHeight,
         decoration: BoxDecoration(
-          color: c.card,
+          color: c.card.withValues(alpha: cardOpacity),
           borderRadius: BorderRadius.circular(16),
           boxShadow: <BoxShadow>[
             BoxShadow(

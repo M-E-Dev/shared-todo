@@ -50,11 +50,13 @@ Future<AppBootstrapResult> bootstrapApp({
     supabaseConfigured: env.hasSupabaseCredentials,
   );
 
+  final AppThemeNotifier themeNotifier = await AppThemeNotifier.load();
+
   return AppBootstrapResult(
     envConfig: env,
     authNotifier: authNotifier,
     sharedListRepository: todoStores.sharedListRepository,
     todoRepository: todoStores.todoRepository,
-    themeNotifier: AppThemeNotifier(),
+    themeNotifier: themeNotifier,
   );
 }

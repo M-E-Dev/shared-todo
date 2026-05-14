@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:ui';
 
 import 'package:flutter/material.dart';
 
@@ -33,11 +32,33 @@ final class _ListDetailScreenState extends State<ListDetailScreen> {
   late SharedList _list;
   List<TodoItem> _items = <TodoItem>[];
   bool _busy = false;
+  bool _addInFlight = false;
+  final Set<String> _mutatingIds = <String>{};
   final TextEditingController _addCtrl = TextEditingController();
   DateTime? _selectedDueDate;
 
   int _pendingNotifyCount = 0;
   Timer? _notifyDebounce;
+
+  List<TodoItem> _applySort(List<TodoItem> raw) {
+    final List<TodoItem> copy = List<TodoItem>.from(raw);
+    switch (_list.sortDirection) {
+      case ListSortDirection.newestFirst:
+        copy.sort(
+          (TodoItem a, TodoItem b) => b.createdAt.compareTo(a.createdAt),
+        );
+      case ListSortDirection.oldestFirst:
+        copy.sort(
+          (TodoItem a, TodoItem b) => a.createdAt.compareTo(b.createdAt),
+        );
+      case ListSortDirection.titleAsc:
+        copy.sort(
+          (TodoItem a, TodoItem b) =>
+              a.title.toLowerCase().compareTo(b.title.toLowerCase()),
+        );
+    }
+    return copy;
+  }
 
   @override
   void initState() {
@@ -86,22 +107,6 @@ final class _ListDetailScreenState extends State<ListDetailScreen> {
 
   void _clearDueDate() => setState(() => _selectedDueDate = null);
 
-  List<TodoItem> _sorted(List<TodoItem> raw) {
-    final copy = List<TodoItem>.from(raw);
-    switch (_list.sortDirection) {
-      case ListSortDirection.newestFirst:
-        copy.sort((TodoItem a, TodoItem b) => b.createdAt.compareTo(a.createdAt));
-      case ListSortDirection.oldestFirst:
-        copy.sort((TodoItem a, TodoItem b) => a.createdAt.compareTo(b.createdAt));
-      case ListSortDirection.titleAsc:
-        copy.sort(
-          (TodoItem a, TodoItem b) =>
-              a.title.toLowerCase().compareTo(b.title.toLowerCase()),
-        );
-    }
-    return copy;
-  }
-
   Future<void> _reload() async {
     if (!mounted) {
       return;
@@ -114,7 +119,7 @@ final class _ListDetailScreenState extends State<ListDetailScreen> {
       if (!mounted) {
         return;
       }
-      setState(() => _items = _sorted(raw));
+      setState(() => _items = _applySort(raw));
     } on AppException catch (e) {
       if (!mounted) {
         return;
@@ -128,26 +133,57 @@ final class _ListDetailScreenState extends State<ListDetailScreen> {
   }
 
   Future<void> _addTodo() async {
+    if (_addInFlight) {
+      return;
+    }
     final title = _addCtrl.text.trim();
     if (title.isEmpty) {
       return;
     }
+    final DateTime? due = _selectedDueDate;
+    final TodoItem temp = TodoItem(
+      id: 'temp_${DateTime.now().microsecondsSinceEpoch}',
+      listId: _list.id,
+      title: title,
+      completed: false,
+      sortOrder: 0,
+      createdAt: DateTime.now().toUtc(),
+      dueDate: due,
+    );
+
+    // Optimistic: anında listede göster.
+    setState(() {
+      _items = _applySort(<TodoItem>[..._items, temp]);
+      _addCtrl.clear();
+      _selectedDueDate = null;
+      _addInFlight = true;
+    });
+    _pendingNotifyCount++;
+    _scheduleNotifyPrompt();
+
     try {
       await AppScope.read(context).todoRepository.addTodo(
             listId: _list.id,
             title: title,
-            dueDate: _selectedDueDate,
+            dueDate: due,
           );
-      _addCtrl.clear();
-      setState(() => _selectedDueDate = null);
-      _pendingNotifyCount++;
-      await _reload();
-      _scheduleNotifyPrompt();
+      if (!mounted) {
+        return;
+      }
+      // Sunucudan gerçek satır + id için sessizce reload.
+      unawaited(_reload());
     } on AppException catch (e) {
       if (!mounted) {
         return;
       }
+      setState(() {
+        _items.removeWhere((TodoItem t) => t.id == temp.id);
+      });
       _showSnack(e.message);
+    } finally {
+      if (mounted) {
+        setState(() => _addInFlight = false);
+      }
     }
   }
 
@@ -202,30 +238,67 @@ final class _ListDetailScreenState extends State<ListDetailScreen> {
   }
 
   Future<void> _toggle(TodoItem item, bool completed) async {
+    // Temp veya zaten mutasyon altında olan satıra ikinci kez basma.
+    if (item.id.startsWith('temp_') || _mutatingIds.contains(item.id)) {
+      return;
+    }
+    final TodoItem original = item;
+    // Optimistic: hemen güncelle.
+    setState(() {
+      _mutatingIds.add(item.id);
+      _items = _items
+          .map(
+            (TodoItem t) =>
+                t.id == item.id ? t.copyWith(completed: completed) : t,
+          )
+          .toList();
+    });
     try {
       await AppScope.read(context)
           .todoRepository
           .setCompleted(todoId: item.id, completed: completed);
-      await _reload();
     } on AppException catch (e) {
       if (!mounted) {
         return;
       }
+      // Rollback.
+      setState(() {
+        _items = _items
+            .map((TodoItem t) => t.id == original.id ? original : t)
+            .toList();
+      });
       _showSnack(e.message);
+    } finally {
+      if (mounted) {
+        setState(() => _mutatingIds.remove(item.id));
+      }
     }
   }
 
   Future<void> _delete(TodoItem item) async {
+    if (item.id.startsWith('temp_') || _mutatingIds.contains(item.id)) {
+      return;
+    }
+    final List<TodoItem> snapshot = List<TodoItem>.from(_items);
+    // Optimistic: hemen kaldır.
+    setState(() {
+      _mutatingIds.add(item.id);
+      _items.removeWhere((TodoItem t) => t.id == item.id);
+    });
     try {
       await AppScope.read(context)
           .todoRepository
           .deleteTodo(todoId: item.id);
-      await _reload();
     } on AppException catch (e) {
       if (!mounted) {
         return;
       }
+      setState(() => _items = snapshot);
       _showSnack(e.message);
+    } finally {
+      if (mounted) {
+        setState(() => _mutatingIds.remove(item.id));
+      }
     }
   }
 
@@ -239,7 +312,7 @@ final class _ListDetailScreenState extends State<ListDetailScreen> {
     }
     setState(() {
       _list = updated;
-      _items = _sorted(_items);
+      _items = _applySort(_items);
     });
     widget.onListUpdated(updated);
   }
@@ -629,46 +702,43 @@ class _TodoTile extends StatelessWidget {
           ),
         ),
         onDismissed: (_) => unawaited(onDelete(item)),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(14),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(14),
-                boxShadow: <BoxShadow>[
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.04),
-                    blurRadius: 6,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(14),
+            boxShadow: <BoxShadow>[
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.04),
+                blurRadius: 6,
+                offset: const Offset(0, 2),
               ),
-              child: CheckboxListTile(
-                value: item.completed,
-                onChanged: busy
-                    ? null
-                    : (bool? v) => unawaited(onToggle(item, v ?? false)),
-                activeColor: accent,
-                checkColor: Colors.white,
-                title: Text(
-                  item.title,
-                  style: TextStyle(
-                    color: item.completed
-                        ? AppColors.textSecondary.withValues(alpha: 0.5)
-                        : AppColors.textPrimary,
-                    decoration: item.completed
-                        ? TextDecoration.lineThrough
-                        : TextDecoration.none,
-                  ),
-                ),
-                subtitle: item.dueDate != null
-                    ? _DueDateBadge(item: item, accent: accent)
-                    : null,
-                dense: true,
+            ],
+          ),
+          child: CheckboxListTile(
+            value: item.completed,
+            onChanged: busy
+                ? null
+                : (bool? v) => unawaited(onToggle(item, v ?? false)),
+            activeColor: accent,
+            checkColor: Colors.white,
+            title: Text(
+              item.title,
+              style: TextStyle(
+                color: item.completed
+                    ? AppColors.textSecondary.withValues(alpha: 0.5)
+                    : AppColors.textPrimary,
+                decoration: item.completed
+                    ? TextDecoration.lineThrough
+                    : TextDecoration.none,
               ),
             ),
+            subtitle: item.dueDate != null
+                ? _DueDateBadge(item: item, accent: accent)
+                : null,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
+            dense: true,
           ),
         ),
       ),

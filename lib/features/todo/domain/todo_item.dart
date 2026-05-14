@@ -55,6 +55,27 @@ final class TodoItem {
     return null;
   }
 
+  TodoItem copyWith({
+    String? id,
+    String? listId,
+    String? title,
+    bool? completed,
+    int? sortOrder,
+    DateTime? createdAt,
+    DateTime? dueDate,
+    bool clearDueDate = false,
+  }) {
+    return TodoItem(
+      id: id ?? this.id,
+      listId: listId ?? this.listId,
+      title: title ?? this.title,
+      completed: completed ?? this.completed,
+      sortOrder: sortOrder ?? this.sortOrder,
+      createdAt: createdAt ?? this.createdAt,
+      dueDate: clearDueDate ? null : (dueDate ?? this.dueDate),
+    );
+  }
+
   /// Gün farkı (bugün = 0, yarın = 1, dün = -1).
   int? get dueDaysFromNow {
     final d = dueDate;
