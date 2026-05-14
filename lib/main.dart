@@ -9,6 +9,8 @@ Future<void> main() async {
     SharedTodoApp(
       envConfig: boot.envConfig,
       authNotifier: boot.authNotifier,
+      sharedListRepository: boot.sharedListRepository,
+      todoRepository: boot.todoRepository,
     ),
   );
 }

@@ -3,6 +3,9 @@ import 'package:flutter/widgets.dart';
 import '../config/env_config.dart';
 import '../../features/auth/data/auth_repository_factory.dart';
 import '../../features/auth/presentation/auth_notifier.dart';
+import '../../features/todo/domain/shared_list_repository.dart';
+import '../../features/todo/domain/todo_repository.dart';
+import '../../features/todo/data/todo_data_factory.dart';
 import 'supabase_bootstrap.dart';
 
 /// Uygulama açılış sırası: binding → env → Supabase → auth deposu → ilk oturum okuma.
@@ -10,10 +13,14 @@ final class AppBootstrapResult {
   const AppBootstrapResult({
     required this.envConfig,
     required this.authNotifier,
+    required this.sharedListRepository,
+    required this.todoRepository,
   });
 
   final EnvConfig envConfig;
   final AuthNotifier authNotifier;
+  final SharedListRepository sharedListRepository;
+  final TodoRepository todoRepository;
 }
 
 Future<AppBootstrapResult> bootstrapApp({
@@ -32,5 +39,18 @@ Future<AppBootstrapResult> bootstrapApp({
 
   await authNotifier.hydrate();
 
-  return AppBootstrapResult(envConfig: env, authNotifier: authNotifier);
+  if (env.hasSupabaseCredentials) {
+    await authNotifier.ensureSupabaseAnonymousSession();
+  }
+
+  final todoStores = createTodoStores(
+    supabaseConfigured: env.hasSupabaseCredentials,
+  );
+
+  return AppBootstrapResult(
+    envConfig: env,
+    authNotifier: authNotifier,
+    sharedListRepository: todoStores.sharedListRepository,
+    todoRepository: todoStores.todoRepository,
+  );
 }

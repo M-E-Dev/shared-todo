@@ -13,9 +13,14 @@ void main() {
       SharedTodoApp(
         envConfig: boot.envConfig,
         authNotifier: boot.authNotifier,
+        sharedListRepository: boot.sharedListRepository,
+        todoRepository: boot.todoRepository,
       ),
     );
     expect(find.text('Shared Todo'), findsOneWidget);
-    expect(find.textContaining('İskelet hazır'), findsOneWidget);
+    expect(
+      find.textContaining('liste ve görevler sırada'),
+      findsOneWidget,
+    );
   });
 }
