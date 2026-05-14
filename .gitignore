@@ -1,0 +1,29 @@
+# Flutter/Dart
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+
+# IDE
+.idea/
+*.iml
+.vscode/*
+!.vscode/extensions.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets / env (API anahtarları buraya konmaz)
+.env
+.env.*
+*.jks
+*.keystore
+**/google-services.json
+**/GoogleService-Info.plist
+
+# Coverage
+coverage/

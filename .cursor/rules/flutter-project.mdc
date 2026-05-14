@@ -6,9 +6,13 @@ alwaysApply: true
 # Flutter Proje Kuralları
 
 ## Proje Durumu
-- Uygulama: shared-todo (isim henüz netleşmedi)
-- State management: henüz seçilmedi
-- Backend: henüz seçilmedi
+- Uygulama: shared-todo — ortak liste/todo; iOS + Android; çoklu kullanıcı
+- Hedef: hızlı, sade, pratik; gereksiz kişisel veri yok; güvenlik ve hukuk için minimal veri
+- Backend / senkron: **Supabase** (Postgres + Auth)
+- Kimlik (MVP): **anonim oturum** + yalnızca **görünen ad** (e-posta toplama yok)
+- **Davet:** paylaşım **bağlantısı** ile; bağlantı bazında **isteğe bağlı süre sonu** (`expiresAt`); **bu bağlantıyla kaç kişinin katılabileceği** üst sınırı net ve sunucuda doğrulanır (`maxJoinCount`, kullanım sayacı).
+- Freemium (ürün planı, uygulama sonra): ücretsizde sınırlı liste/işbirlikçi; ücretlide hatırlatıcı / reklamsızlık vb.; **ilk release tamamen ücretsiz**
+- State management: henüz seçilmedi (Riverpod vs Bloc — sonra)
 - Ekranlar: henüz tanımlanmadı
 
 ## Token Verimliliği
@@ -19,23 +23,28 @@ alwaysApply: true
 - Kullanıcı onaylamadan pubspec.yaml'a dependency ekleme.
 - Hata ayıklarken önce ilgili dosyayı oku, varsayımla düzeltme yapma.
 
-## Klasör Yapısı (standart)
+## Klasör yapısı
 
 ```
 lib/
-  main.dart
+  main.dart                 → bootstrap + runApp
   app/
-    router/
+    app.dart                → MaterialApp, tema
+    app_scope.dart          → InheritedWidget: EnvConfig + AuthNotifier
+    router/                 → GoRouter (ileride)
     theme/
-  features/
-    <feature>/
-      data/
-      domain/
-      presentation/
+  core/
+    config/env_config.dart
+    bootstrap/              → initSupabase, bootstrapApp
+    errors/app_exception.dart
+  features/<özellik>/
+    data/ domain/ presentation/
   shared/
     widgets/
-    utils/
+    utils/                  → display_name, context_guard
 ```
+
+Özellik örnekleri: `auth`, `sharing`, `todo`.
 
 ## Kod Standartları
 

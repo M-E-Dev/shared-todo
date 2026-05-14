@@ -1,0 +1,54 @@
+# Dart, TypeScript değildir ama benzer disiplin sağlar:
+# - Güçlü statik tip + sound null safety (ayrı .ts dosyası gerekmez).
+# - flutter analyze / dart analyze = tip + lint + birçok mantık hatası.
+# - pub get sırasında bilinen güvenlik advisory’leri gösterilir (pub.dev güvenlik veritabanı).
+#
+# Knip benzeri “ölü dosya/export” için tek resmi araç yok; en yakını:
+# - analyzer uyarıları (unused import / unused element),
+# - CI’de `dart analyze --fatal-infos`,
+# - isteğe bağlı: DCM / dart_code_metrics (ticari/ücretsiz katman) veya elle dedupe.
+
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  language:
+    strict-casts: true
+    strict-inference: true
+    strict-raw-types: true
+  errors:
+    # Async sonrası yanlış BuildContext kullanımını gözden kaçırmayın.
+    use_build_context_synchronously: error
+  exclude:
+    - "**/*.g.dart"
+    - "**/*.freezed.dart"
+
+linter:
+  rules:
+    # --- Zaten açık ---
+    prefer_const_constructors: true
+    prefer_const_declarations: true
+    avoid_print: true
+
+    # --- Async / UI güvenliği (Flutter) ---
+    use_build_context_synchronously: true
+
+    # --- Tip disiplini (TS-benzeri sıkılığa yaklaştırır) ---
+    avoid_dynamic_calls: true
+    always_declare_return_types: true
+    type_literal_in_constant_pattern: true
+
+    # --- Kaynak / bellek hijyeni ---
+    cancel_subscriptions: true
+    close_sinks: true
+
+    # --- Ölü kod / gereksiz import (knip’in bir kısmı) ---
+    unnecessary_import: true
+    unnecessary_library_directive: true
+    unnecessary_null_aware_assignments: true
+    unused_element: true
+
+    # --- Okunabilirlik + yanlış API kullanımını azaltma ---
+    prefer_final_locals: true
+    prefer_final_fields: true
+    require_trailing_commas: true
+    avoid_slow_async_io: true
