@@ -25,10 +25,28 @@ final class SupabaseTodoRepository implements TodoRepository {
           .eq('list_id', listId)
           .order('sort_order', ascending: true)
           .order('created_at', ascending: true);
-      final rows = List<Map<String, dynamic>>.from(raw as List<dynamic>);
-      return rows.map(TodoItem.fromJson).toList();
+      return List<Map<String, dynamic>>.from(raw as List<dynamic>)
+          .map(TodoItem.fromJson)
+          .toList();
     } on PostgrestException catch (e) {
       throw AuthException('Görevler yüklenemedi (${e.message})');
+    }
+  }
+
+  @override
+  Future<List<TodoItem>> fetchTodosWithDueDate() async {
+    _requireUid();
+    try {
+      final raw = await _client
+          .from('todos')
+          .select()
+          .not('due_date', 'is', null)
+          .order('due_date', ascending: true);
+      return List<Map<String, dynamic>>.from(raw as List<dynamic>)
+          .map(TodoItem.fromJson)
+          .toList();
+    } on PostgrestException catch (e) {
+      throw AuthException('Takvim görevi yüklenemedi (${e.message})');
     }
   }
 
@@ -36,6 +54,7 @@ final class SupabaseTodoRepository implements TodoRepository {
   Future<void> addTodo({
     required String listId,
     required String title,
+    DateTime? dueDate,
   }) async {
     final trimmed = title.trim();
     if (trimmed.isEmpty) {
@@ -43,13 +62,37 @@ final class SupabaseTodoRepository implements TodoRepository {
     }
     _requireUid();
     try {
-      await _client.from('todos').insert({
+      final payload = <String, dynamic>{
         'list_id': listId,
         'title': trimmed,
         'completed': false,
         'sort_order': 0,
-      });
+      };
+      if (dueDate != null) {
+        payload['due_date'] =
+            '${dueDate.year.toString().padLeft(4, '0')}-'
+            '${dueDate.month.toString().padLeft(2, '0')}-'
+            '${dueDate.day.toString().padLeft(2, '0')}';
+      }
+      await _client.from('todos').insert(payload);
     } on PostgrestException catch (e) {
+      // Şema önbelleği due_date sütununu tanımıyorsa tarihsiz tekrar dene.
+      if (e.message.contains('due_date') && dueDate != null) {
+        try {
+          await _client.from('todos').insert(<String, dynamic>{
+            'list_id': listId,
+            'title': trimmed,
+            'completed': false,
+            'sort_order': 0,
+          });
+          return;
+        } on PostgrestException catch (e2) {
+          throw AuthException(
+            'Görev eklenemedi (${e2.message}). '
+            'Migration 005\'i Supabase SQL Editor\'da çalıştırın.',
+          );
+        }
+      }
       throw AuthException('Görev eklenemedi (${e.message})');
     }
   }

@@ -10,6 +10,7 @@ final class TodoItem {
     required this.completed,
     required this.sortOrder,
     required this.createdAt,
+    this.dueDate,
   });
 
   final String id;
@@ -19,6 +20,9 @@ final class TodoItem {
   final int sortOrder;
   final DateTime createdAt;
 
+  /// Opsiyonel son tarih (sadece tarih, saat yok).
+  final DateTime? dueDate;
+
   factory TodoItem.fromJson(Map<String, dynamic> json) {
     return TodoItem(
       id: json['id'] as String,
@@ -26,8 +30,41 @@ final class TodoItem {
       title: json['title'] as String,
       completed: json['completed'] as bool,
       sortOrder: (json['sort_order'] as num).toInt(),
-      createdAt: SharedTimestamp.parseUtc(json['created_at']),
+      createdAt: _parseUtc(json['created_at']),
+      dueDate: _parseDate(json['due_date']),
     );
+  }
+
+  static DateTime _parseUtc(Object? raw) {
+    if (raw is String) {
+      return DateTime.tryParse(raw)?.toUtc() ?? DateTime.now().toUtc();
+    }
+    if (raw is DateTime) {
+      return raw.toUtc();
+    }
+    return DateTime.now().toUtc();
+  }
+
+  static DateTime? _parseDate(Object? raw) {
+    if (raw == null) {
+      return null;
+    }
+    if (raw is String) {
+      return DateTime.tryParse(raw);
+    }
+    return null;
+  }
+
+  /// Gün farkı (bugün = 0, yarın = 1, dün = -1).
+  int? get dueDaysFromNow {
+    final d = dueDate;
+    if (d == null) {
+      return null;
+    }
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final due = DateTime(d.year, d.month, d.day);
+    return due.difference(today).inDays;
   }
 
   @override
@@ -38,25 +75,11 @@ final class TodoItem {
         other.title == title &&
         other.completed == completed &&
         other.sortOrder == sortOrder &&
-        other.createdAt == createdAt;
+        other.createdAt == createdAt &&
+        other.dueDate == dueDate;
   }
 
   @override
   int get hashCode =>
-      Object.hash(id, listId, title, completed, sortOrder, createdAt);
-}
-
-@immutable
-abstract final class SharedTimestamp {
-  const SharedTimestamp._();
-
-  static DateTime parseUtc(Object? raw) {
-    if (raw is String) {
-      return DateTime.tryParse(raw)?.toUtc() ?? DateTime.now().toUtc();
-    }
-    if (raw is DateTime) {
-      return raw.toUtc();
-    }
-    return DateTime.now().toUtc();
-  }
+      Object.hash(id, listId, title, completed, sortOrder, createdAt, dueDate);
 }

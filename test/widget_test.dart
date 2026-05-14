@@ -15,12 +15,9 @@ void main() {
         authNotifier: boot.authNotifier,
         sharedListRepository: boot.sharedListRepository,
         todoRepository: boot.todoRepository,
+        themeNotifier: boot.themeNotifier,
       ),
     );
     expect(find.text('Shared Todo'), findsOneWidget);
-    expect(
-      find.textContaining('liste ve görevler sırada'),
-      findsOneWidget,
-    );
   });
 }

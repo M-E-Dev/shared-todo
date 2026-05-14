@@ -1,6 +1,7 @@
 import 'package:flutter/widgets.dart';
 
 import '../config/env_config.dart';
+import '../../app/theme/app_theme_notifier.dart';
 import '../../features/auth/data/auth_repository_factory.dart';
 import '../../features/auth/presentation/auth_notifier.dart';
 import '../../features/todo/domain/shared_list_repository.dart';
@@ -15,12 +16,14 @@ final class AppBootstrapResult {
     required this.authNotifier,
     required this.sharedListRepository,
     required this.todoRepository,
+    required this.themeNotifier,
   });
 
   final EnvConfig envConfig;
   final AuthNotifier authNotifier;
   final SharedListRepository sharedListRepository;
   final TodoRepository todoRepository;
+  final AppThemeNotifier themeNotifier;
 }
 
 Future<AppBootstrapResult> bootstrapApp({
@@ -52,5 +55,6 @@ Future<AppBootstrapResult> bootstrapApp({
     authNotifier: authNotifier,
     sharedListRepository: todoStores.sharedListRepository,
     todoRepository: todoStores.todoRepository,
+    themeNotifier: AppThemeNotifier(),
   );
 }

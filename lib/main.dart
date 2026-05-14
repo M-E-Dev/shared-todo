@@ -11,6 +11,7 @@ Future<void> main() async {
       authNotifier: boot.authNotifier,
       sharedListRepository: boot.sharedListRepository,
       todoRepository: boot.todoRepository,
+      themeNotifier: boot.themeNotifier,
     ),
   );
 }
