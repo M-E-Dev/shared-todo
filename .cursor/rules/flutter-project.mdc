@@ -1,0 +1,52 @@
+---
+description: Flutter proje kuralları ve token verimlilik rehberi
+alwaysApply: true
+---
+
+# Flutter Proje Kuralları
+
+## Proje Durumu
+- Uygulama: shared-todo (isim henüz netleşmedi)
+- State management: henüz seçilmedi
+- Backend: henüz seçilmedi
+- Ekranlar: henüz tanımlanmadı
+
+## Token Verimliliği
+
+- Kullanıcı "devam et" derse, bağlamı hatırla, tekrar sorma.
+- Dosya düzenlerken sadece değişen kısmı göster, tüm dosyayı yeniden yazma.
+- Yeni ekran eklerken mevcut folder structure'ı koru, sormadan değiştirme.
+- Kullanıcı onaylamadan pubspec.yaml'a dependency ekleme.
+- Hata ayıklarken önce ilgili dosyayı oku, varsayımla düzeltme yapma.
+
+## Klasör Yapısı (standart)
+
+```
+lib/
+  main.dart
+  app/
+    router/
+    theme/
+  features/
+    <feature>/
+      data/
+      domain/
+      presentation/
+  shared/
+    widgets/
+    utils/
+```
+
+## Kod Standartları
+
+- Widget'ları küçük tut: 100 satırı geçince ayır.
+- `const` constructor'ları her zaman kullan.
+- Named routes yerine GoRouter kullan (eğer routing gerekirse).
+- `BuildContext` async gap'lerde kullanmadan önce `mounted` kontrol et.
+- Model sınıfları `freezed` veya manuel `copyWith` + `==` + `hashCode` içermeli.
+
+## Kullanıcı Tercihleri
+
+- Türkçe iletişim kur.
+- Kısa ve net yanıtlar ver; gereksiz açıklama yapma.
+- Yeni bir şey öğrenildiğinde veya kullanıcı tercih belirttiğinde bu kuralı güncelle.
