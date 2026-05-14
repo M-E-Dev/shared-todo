@@ -16,3 +16,8 @@ final class ConfigurationException extends AppException {
 final class AuthException extends AppException {
   const AuthException(super.message);
 }
+
+/// Veritabanı / API erişim veya okuma hatası (kimlik dışı).
+final class DataException extends AppException {
+  const DataException(super.message);
+}

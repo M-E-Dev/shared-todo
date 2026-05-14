@@ -8,18 +8,22 @@ import '../../../core/errors/app_exception.dart';
 import '../domain/shared_list.dart';
 import '../domain/todo_item.dart';
 import 'list_settings_dialog.dart';
-import 'lists_overview.dart' show AppColors;
+import '../../../app/theme/app_colors.dart';
 
 /// Tek listenin detay ekranı: görevler, sıralama, bildirim prompt.
 class ListDetailScreen extends StatefulWidget {
   const ListDetailScreen({
     required this.list,
     required this.onListUpdated,
+    this.pendingNotifyCount = 0,
     super.key,
   });
 
   final SharedList list;
   final ValueChanged<SharedList> onListUpdated;
+
+  /// Ana ekrandan geçilen: kullanıcı son ziyaretten bu yana kaç yeni todo birikmiş.
+  final int pendingNotifyCount;
 
   @override
   State<ListDetailScreen> createState() => _ListDetailScreenState();
@@ -39,7 +43,13 @@ final class _ListDetailScreenState extends State<ListDetailScreen> {
   void initState() {
     super.initState();
     _list = widget.list;
-    WidgetsBinding.instance.addPostFrameCallback((_) => _reload());
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _reload();
+      // Biriken bildirimler varsa, yükleme bittikten sonra sor.
+      if (mounted && widget.pendingNotifyCount > 0) {
+        _showNotifyPrompt(widget.pendingNotifyCount, fromBadge: true);
+      }
+    });
   }
 
   @override
@@ -152,19 +162,38 @@ final class _ListDetailScreenState extends State<ListDetailScreen> {
     });
   }
 
-  void _showNotifyPrompt(int count) {
-    final String text = count == 1
-        ? '1 yeni görev eklendi.'
-        : '$count yeni görev eklendi.';
+  /// [fromBadge] = true ise rozetten tetiklendi (başkası ekledi mesajı göster).
+  /// [fromBadge] = false ise bizzat bu kullanıcı ekledi.
+  /// [isReminder] = true ise "hatırlatma" modunda açıldı.
+  void _showNotifyPrompt(
+    int count, {
+    bool fromBadge = false,
+    bool isReminder = false,
+  }) {
+    final String text;
+    if (isReminder) {
+      text = 'Tüm liste üyelerine hatırlatma gönderilsin mi?';
+    } else if (fromBadge) {
+      text = count == 1
+          ? 'Listede 1 yeni görev var. Diğer üyelere bildirim gönderilsin mi?'
+          : 'Listede $count yeni görev var. Diğer üyelere bildirim gönderilsin mi?';
+    } else {
+      text = count == 1
+          ? '1 yeni görev eklendi.'
+          : '$count yeni görev eklendi.';
+    }
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.white,
       builder: (BuildContext ctx) {
         return _NotifySheet(
           message: text,
+          sendLabel: isReminder ? 'Hatırlatma gönder' : 'Bildirim gönder',
           onSend: () {
             Navigator.of(ctx).pop();
-            _showSnack('Bildirim gönderildi ✓');
+            _showSnack(
+              isReminder ? 'Hatırlatma gönderildi ✓' : 'Bildirim gönderildi ✓',
+            );
           },
           onSkip: () => Navigator.of(ctx).pop(),
         );
@@ -276,6 +305,33 @@ final class _ListDetailScreenState extends State<ListDetailScreen> {
                       ),
                       tooltip: 'Ayarlar',
                       onPressed: _openSettings,
+                    ),
+                    // Üç nokta menüsü — hatırlatma vb.
+                    PopupMenuButton<String>(
+                      icon: const Icon(
+                        Icons.more_vert_rounded,
+                        color: AppColors.textSecondary,
+                      ),
+                      onSelected: (String value) {
+                        if (value == 'remind') {
+                          _showNotifyPrompt(0, isReminder: true);
+                        }
+                      },
+                      itemBuilder: (_) => <PopupMenuEntry<String>>[
+                        const PopupMenuItem<String>(
+                          value: 'remind',
+                          child: Row(
+                            children: <Widget>[
+                              Icon(
+                                Icons.notifications_active_outlined,
+                                size: 18,
+                              ),
+                              SizedBox(width: 10),
+                              Text('Tüm üyelere hatırlat'),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -681,11 +737,13 @@ class _NotifySheet extends StatelessWidget {
     required this.message,
     required this.onSend,
     required this.onSkip,
+    this.sendLabel = 'Bildirim gönder',
   });
 
   final String message;
   final VoidCallback onSend;
   final VoidCallback onSkip;
+  final String sendLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -751,7 +809,7 @@ class _NotifySheet extends StatelessWidget {
                   child: FilledButton.icon(
                     onPressed: onSend,
                     icon: const Icon(Icons.send_rounded, size: 18),
-                    label: const Text('Bildirim gönder'),
+                    label: Text(sendLabel),
                     style: FilledButton.styleFrom(
                       backgroundColor: AppColors.accent,
                       padding: const EdgeInsets.symmetric(vertical: 14),

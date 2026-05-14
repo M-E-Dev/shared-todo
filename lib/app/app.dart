@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../core/config/env_config.dart';
+import '../features/auth/domain/auth_user.dart';
 import '../features/auth/presentation/auth_notifier.dart';
 import '../features/todo/domain/shared_list_repository.dart';
 import '../features/todo/domain/todo_repository.dart';
@@ -462,7 +463,7 @@ class _LoginCard extends StatelessWidget {
   final AppThemePreset c;
   final EnvConfig cfg;
   final AuthNotifier auth;
-  final dynamic user;
+  final AuthUser? user;
   final TextEditingController nameCtrl;
   final bool savingName;
   final String? nameError;

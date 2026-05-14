@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import '../../../app/app_scope.dart';
 import '../../../core/errors/app_exception.dart';
 import '../domain/todo_item.dart';
-import 'lists_overview.dart' show AppColors;
+import '../../../app/theme/app_colors.dart';
 
 /// Takvim ekranı: aylık görünüm + seçili güne ait todo'lar.
 class CalendarScreen extends StatefulWidget {

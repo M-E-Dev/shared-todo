@@ -4,33 +4,13 @@ import 'package:supabase_flutter/supabase_flutter.dart'
     hide AuthException, AuthUser;
 
 import '../../../app/app_scope.dart';
+import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_theme_preset.dart';
 import '../../../core/errors/app_exception.dart';
 import '../domain/shared_list.dart';
 import '../domain/todo_item.dart';
 import 'list_detail_screen.dart';
 import 'list_settings_dialog.dart';
-
-// AppColors — tema renk erişimi için kısayol (deprecated: artık _c(context) kullanıyoruz).
-// Diğer dosyalar hâlâ bunu import edebilir; dinamik hale getirildi.
-// ignore: avoid_classes_with_only_static_members
-abstract final class AppColors {
-  static Color bg = const Color(0xFFF0F7FF);
-  static Color card = Colors.white;
-  static Color accent = const Color(0xFF2563EB);
-  static Color textPrimary = const Color(0xFF0F172A);
-  static Color textSecondary = const Color(0xFF64748B);
-  static Color divider = const Color(0xFFE2E8F0);
-
-  static void updateFrom(AppThemePreset p) {
-    bg = p.bg;
-    card = p.card;
-    accent = p.accent;
-    textPrimary = p.textPrimary;
-    textSecondary = p.textSecondary;
-    divider = p.divider;
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Ana ekran
@@ -65,6 +45,26 @@ final class _ListsOverviewState extends State<ListsOverview> {
   static const int _defaultRows = 4;
 
   int _rowsFor(String id) => _rowCounts[id] ?? _defaultRows;
+
+  // Bildirim rozeti: kullanıcı listeyi en son açtığında kaç todo vardı.
+  // Refresh sonrası fark > 0 ise kırmızı rozet gösterilir.
+  final Map<String, int> _lastSeenCounts = <String, int>{};
+
+  /// listId → kullanıcı görmediği yeni todo sayısı.
+  Map<String, int> get _pendingBadges {
+    final Map<String, int> result = <String, int>{};
+    for (final SharedList list in _lists) {
+      final int current = _todosMap[list.id]?.length ?? 0;
+      if (!_lastSeenCounts.containsKey(list.id)) {
+        continue; // İlk yüklemede rozet yok
+      }
+      final int diff = current - (_lastSeenCounts[list.id] ?? current);
+      if (diff > 0) {
+        result[list.id] = diff;
+      }
+    }
+    return result;
+  }
 
   RealtimeChannel? _realtimeChannel;
 
@@ -118,6 +118,17 @@ final class _ListsOverviewState extends State<ListsOverview> {
       for (int i = 0; i < lists.length; i++) {
         map[lists[i].id] = _sorted(results[i], lists[i].sortDirection);
       }
+
+      // Rozet hesapla: daha önce görülmüş listeler için artan sayı = yeni todo
+      final Map<String, int> newSeenCounts = <String, int>{};
+      for (final SharedList l in lists) {
+        newSeenCounts[l.id] = _lastSeenCounts.containsKey(l.id)
+            ? _lastSeenCounts[l.id]! // Önceki değeri koru; kullanıcı açınca güncellenir
+            : (map[l.id]?.length ?? 0); // İlk görüşte mevcut sayıyı "görülmüş" say
+      }
+      _lastSeenCounts
+        ..clear()
+        ..addAll(newSeenCounts);
 
       setState(() {
         _lists = lists;
@@ -245,11 +256,19 @@ final class _ListsOverviewState extends State<ListsOverview> {
   }
 
   void _openDetail(SharedList list) {
+    // Kaç yeni todo bekliyor?
+    final int pendingCount = _pendingBadges[list.id] ?? 0;
+    // Rozeti temizle: şu anki sayıyı "görüldü" olarak işaretle.
+    setState(() {
+      _lastSeenCounts[list.id] = _todosMap[list.id]?.length ?? 0;
+    });
+
     Navigator.of(context)
         .push(
           MaterialPageRoute<void>(
             builder: (_) => ListDetailScreen(
               list: list,
+              pendingNotifyCount: pendingCount,
               onListUpdated: (SharedList _) {
                 if (mounted) {
                   unawaited(_refresh());
@@ -296,7 +315,6 @@ final class _ListsOverviewState extends State<ListsOverview> {
   @override
   Widget build(BuildContext context) {
     final c = AppScope.read(context).themeNotifier.current;
-    AppColors.updateFrom(c);
 
     return Scaffold(
       backgroundColor: c.bg,
@@ -341,6 +359,7 @@ final class _ListsOverviewState extends State<ListsOverview> {
                                       list: list,
                                       todos: todos,
                                       rowCount: _rowsFor(list.id),
+                                      badgeCount: _pendingBadges[list.id] ?? 0,
                                       c: c,
                                       onTap: () => _openDetail(list),
                                       onSettings: () => _openSettings(list),
@@ -529,7 +548,7 @@ final class _CompactFabState extends State<_CompactFab> {
             const Icon(Icons.add_rounded, color: Colors.white, size: 24),
             if (_expanded) ...<Widget>[
               const SizedBox(width: 6),
-              const Text(
+              Text(
                 'Yeni liste',
                 style: TextStyle(
                   color: Colors.white,
@@ -556,6 +575,7 @@ class _ListCard extends StatelessWidget {
     required this.list,
     required this.todos,
     required this.rowCount,
+    required this.badgeCount,
     required this.c,
     required this.onTap,
     required this.onSettings,
@@ -566,6 +586,7 @@ class _ListCard extends StatelessWidget {
   final SharedList list;
   final List<TodoItem> todos;
   final int rowCount;
+  final int badgeCount; // 0 = rozet yok
   final AppThemePreset c;
   final VoidCallback onTap;
   final VoidCallback onSettings;
@@ -589,7 +610,7 @@ class _ListCard extends StatelessWidget {
       child: Container(
         height: _totalHeight,
         decoration: BoxDecoration(
-          color: AppColors.card,
+          color: c.card,
           borderRadius: BorderRadius.circular(16),
           boxShadow: <BoxShadow>[
             BoxShadow(
@@ -629,8 +650,8 @@ class _ListCard extends StatelessWidget {
                     Expanded(
                       child: Text(
                         list.title,
-                        style: const TextStyle(
-                          color: AppColors.textPrimary,
+                        style: TextStyle(
+                          color: c.textPrimary,
                           fontSize: 15,
                           fontWeight: FontWeight.w700,
                         ),
@@ -638,6 +659,27 @@ class _ListCard extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
+                    // Bildirim rozeti
+                    if (badgeCount > 0)
+                      Container(
+                        margin: const EdgeInsets.only(right: 4),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 7,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFDC2626),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Text(
+                          '+$badgeCount',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
                     if (todos.isNotEmpty)
                       Container(
                         padding: const EdgeInsets.symmetric(
@@ -660,7 +702,7 @@ class _ListCard extends StatelessWidget {
                     IconButton(
                       icon: Icon(
                         Icons.tune_rounded,
-                        color: AppColors.textSecondary.withValues(alpha: 0.6),
+                        color: c.textSecondary.withValues(alpha: 0.6),
                         size: 17,
                       ),
                       onPressed: onSettings,
@@ -673,7 +715,7 @@ class _ListCard extends StatelessWidget {
                 ),
               ),
             ),
-            const Divider(height: 1, thickness: 1, color: AppColors.divider),
+            Divider(height: 1, thickness: 1, color: c.divider),
             // Todo satırları — tam yükseklikte kaydırılabilir
             Expanded(
               child: todos.isEmpty
@@ -681,7 +723,7 @@ class _ListCard extends StatelessWidget {
                       child: Text(
                         'Görev yok — dokun ekle',
                         style: TextStyle(
-                          color: AppColors.textSecondary.withValues(alpha: 0.6),
+                          color: c.textSecondary.withValues(alpha: 0.6),
                           fontSize: 12,
                         ),
                       ),
@@ -702,51 +744,51 @@ class _ListCard extends StatelessWidget {
             // Alt çubuk
             Container(
               height: _footerH,
-              decoration: const BoxDecoration(
-                border: Border(top: BorderSide(color: AppColors.divider)),
+              decoration: BoxDecoration(
+                border: Border(top: BorderSide(color: c.divider)),
               ),
               padding: const EdgeInsets.symmetric(horizontal: 14),
               child: Row(
                 children: <Widget>[
-                  const Icon(
+                  Icon(
                     Icons.open_in_new_rounded,
                     size: 11,
-                    color: AppColors.textSecondary,
+                    color: c.textSecondary,
                   ),
                   const SizedBox(width: 4),
-                  const Text(
+                  Text(
                     'Detay',
                     style: TextStyle(
                       fontSize: 11,
-                      color: AppColors.textSecondary,
+                      color: c.textSecondary,
                     ),
                   ),
                   const SizedBox(width: 10),
-                  const Icon(
+                  Icon(
                     Icons.straighten_rounded,
                     size: 11,
-                    color: AppColors.textSecondary,
+                    color: c.textSecondary,
                   ),
                   const SizedBox(width: 4),
-                  const Text(
+                  Text(
                     'Bas & boyutlandır',
                     style: TextStyle(
                       fontSize: 11,
-                      color: AppColors.textSecondary,
+                      color: c.textSecondary,
                     ),
                   ),
                   const Spacer(),
                   Icon(
                     Icons.sort_rounded,
                     size: 11,
-                    color: AppColors.textSecondary.withValues(alpha: 0.6),
+                    color: c.textSecondary.withValues(alpha: 0.6),
                   ),
                   const SizedBox(width: 3),
                   Text(
                     list.sortDirection.label,
                     style: TextStyle(
                       fontSize: 11,
-                      color: AppColors.textSecondary.withValues(alpha: 0.6),
+                      color: c.textSecondary.withValues(alpha: 0.6),
                     ),
                   ),
                 ],
@@ -790,6 +832,7 @@ class _MiniTodoRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final c = AppScope.read(context).themeNotifier.current;
     final Color? bg = _dueBg();
 
     return Container(
@@ -810,7 +853,7 @@ class _MiniTodoRow extends StatelessWidget {
                 border: Border.all(
                   color: item.completed
                       ? accent
-                      : AppColors.textSecondary.withValues(alpha: 0.35),
+                      : c.textSecondary.withValues(alpha: 0.35),
                   width: 1.5,
                 ),
               ),
@@ -827,8 +870,8 @@ class _MiniTodoRow extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 13,
                   color: item.completed
-                      ? AppColors.textSecondary.withValues(alpha: 0.45)
-                      : AppColors.textPrimary,
+                      ? c.textSecondary.withValues(alpha: 0.45)
+                      : c.textPrimary,
                   decoration: item.completed
                       ? TextDecoration.lineThrough
                       : TextDecoration.none,
@@ -879,11 +922,12 @@ class _RowPickerSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final c = AppScope.read(context).themeNotifier.current;
     return Container(
       margin: const EdgeInsets.all(12),
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: c.card,
         borderRadius: BorderRadius.circular(20),
       ),
       child: Column(
@@ -892,17 +936,17 @@ class _RowPickerSheet extends StatelessWidget {
         children: <Widget>[
           Row(
             children: <Widget>[
-              const Icon(
+              Icon(
                 Icons.table_rows_rounded,
-                color: AppColors.accent,
+                color: c.accent,
                 size: 20,
               ),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
                   '"$title" — gösterilecek satır',
-                  style: const TextStyle(
-                    color: AppColors.textPrimary,
+                  style: TextStyle(
+                    color: c.textPrimary,
                     fontWeight: FontWeight.w600,
                     fontSize: 15,
                   ),
@@ -919,8 +963,8 @@ class _RowPickerSheet extends StatelessWidget {
                 ),
                 child: Text(
                   '$value satır',
-                  style: const TextStyle(
-                    color: AppColors.accent,
+                  style: TextStyle(
+                    color: c.accent,
                     fontWeight: FontWeight.w700,
                     fontSize: 14,
                   ),
@@ -949,7 +993,7 @@ class _RowPickerSheet extends StatelessWidget {
                     border: Border.all(
                       color: selected
                           ? AppColors.accent
-                          : AppColors.divider,
+                          : c.divider,
                     ),
                   ),
                   child: Center(
@@ -967,21 +1011,21 @@ class _RowPickerSheet extends StatelessWidget {
             }),
           ),
           const SizedBox(height: 8),
-          const Row(
+          Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: <Widget>[
               Text(
                 'Min $_min satır',
                 style: TextStyle(
                   fontSize: 11,
-                  color: AppColors.textSecondary,
+                  color: c.textSecondary,
                 ),
               ),
               Text(
                 'Max $_max satır',
                 style: TextStyle(
                   fontSize: 11,
-                  color: AppColors.textSecondary,
+                  color: c.textSecondary,
                 ),
               ),
             ],
@@ -994,13 +1038,13 @@ class _RowPickerSheet extends StatelessWidget {
                   onPressed: onCancel,
                   style: OutlinedButton.styleFrom(
                     foregroundColor: AppColors.textSecondary,
-                    side: const BorderSide(color: AppColors.divider),
+                    side: BorderSide(color: c.divider),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
                     padding: const EdgeInsets.symmetric(vertical: 12),
                   ),
-                  child: const Text('Vazgeç'),
+                  child: Text('Vazgeç'),
                 ),
               ),
               const SizedBox(width: 12),
@@ -1036,12 +1080,13 @@ class _CreateListDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final c = AppScope.read(context).themeNotifier.current;
     return AlertDialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-      title: const Row(
+      title: Row(
         children: <Widget>[
-          Icon(Icons.playlist_add_rounded, color: AppColors.accent),
-          SizedBox(width: 8),
+          Icon(Icons.playlist_add_rounded, color: c.accent),
+          const SizedBox(width: 8),
           Text('Yeni liste'),
         ],
       ),
@@ -1090,10 +1135,15 @@ class _CreateListDialog extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _ErrorBanner extends StatelessWidget {
-  const _ErrorBanner({required this.message, required this.onRetry});
+  const _ErrorBanner({
+    required this.message,
+    required this.onRetry,
+    required this.c,
+  });
 
   final String message;
   final VoidCallback onRetry;
+  final AppThemePreset c;
 
   @override
   Widget build(BuildContext context) {
@@ -1117,7 +1167,7 @@ class _ErrorBanner extends StatelessWidget {
             Expanded(
               child: Text(
                 message,
-                style: const TextStyle(
+                style: TextStyle(
                   color: Color(0xFFE53E3E),
                   fontSize: 13,
                 ),
@@ -1139,9 +1189,10 @@ class _ErrorBanner extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _EmptyState extends StatelessWidget {
-  const _EmptyState({required this.onCreate});
+  const _EmptyState({required this.onCreate, required this.c});
 
   final VoidCallback onCreate;
+  final AppThemePreset c;
 
   @override
   Widget build(BuildContext context) {
@@ -1155,8 +1206,11 @@ class _EmptyState extends StatelessWidget {
               width: 72,
               height: 72,
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: <Color>[Color(0xFF2563EB), Color(0xFF0EA5E9)],
+                gradient: LinearGradient(
+                  colors: <Color>[
+                    c.accent,
+                    Color.lerp(c.accent, Colors.blue, 0.4)!,
+                  ],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                 ),
@@ -1169,20 +1223,20 @@ class _EmptyState extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 20),
-            const Text(
+            Text(
               'Henüz listen yok',
               style: TextStyle(
-                color: AppColors.textPrimary,
+                color: c.textPrimary,
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
               ),
             ),
             const SizedBox(height: 8),
-            const Text(
+            Text(
               'Alttaki + Yeni liste butonuna dokun.',
               textAlign: TextAlign.center,
               style: TextStyle(
-                color: AppColors.textSecondary,
+                color: c.textSecondary,
                 fontSize: 14,
                 height: 1.5,
               ),
