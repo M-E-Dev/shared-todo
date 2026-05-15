@@ -1,0 +1,10 @@
+# Git ile Netlify deploy edersen bu dosya kullanılır.
+# Drag & drop için: build/web içindeki _redirects yeterli.
+
+[build]
+  publish = "build/web"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
