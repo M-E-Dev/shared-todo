@@ -2,9 +2,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../../app/app_scope.dart';
-import '../../../core/errors/app_exception.dart';
-import '../domain/todo_item.dart';
 import '../../../app/theme/app_colors.dart';
+import '../../../app/theme/app_theme_preset.dart';
+import '../../../core/errors/app_exception.dart';
+import '../domain/shared_list.dart';
+import '../domain/todo_item.dart';
+import '../domain/todo_sort.dart';
 
 /// Takvim ekranı: aylık görünüm + seçili güne ait todo'lar.
 class CalendarScreen extends StatefulWidget {
@@ -18,6 +21,7 @@ final class _CalendarScreenState extends State<CalendarScreen> {
   DateTime _focusMonth = DateTime.now();
   DateTime _selected = DateTime.now();
   List<TodoItem> _allTodos = <TodoItem>[];
+  Map<String, Color> _listColors = <String, Color>{};
   bool _loading = true;
   bool _didInit = false;
 
@@ -36,12 +40,22 @@ final class _CalendarScreenState extends State<CalendarScreen> {
     }
     setState(() => _loading = true);
     try {
-      final todos =
-          await AppScope.read(context).todoRepository.fetchTodosWithDueDate();
+      final scope = AppScope.read(context);
+      final List<Object> results = await Future.wait(<Future<Object>>[
+        scope.todoRepository.fetchTodosWithDueDate(),
+        scope.sharedListRepository.fetchMyLists(),
+      ]);
       if (!mounted) {
         return;
       }
-      setState(() => _allTodos = todos);
+      final List<TodoItem> todos = results[0] as List<TodoItem>;
+      final List<SharedList> lists = results[1] as List<SharedList>;
+      setState(() {
+        _allTodos = todos;
+        _listColors = <String, Color>{
+          for (final SharedList l in lists) l.id: l.color,
+        };
+      });
     } on AppException catch (e) {
       if (!mounted) {
         return;
@@ -67,9 +81,20 @@ final class _CalendarScreenState extends State<CalendarScreen> {
   bool _sameMonth(DateTime a, DateTime b) =>
       a.year == b.year && a.month == b.month;
 
-  List<TodoItem> _todosForDay(DateTime day) => _allTodos
-      .where((TodoItem t) => t.dueDate != null && _sameDay(t.dueDate!, day))
-      .toList();
+  List<TodoItem> _todosForDay(DateTime day) {
+    final List<TodoItem> raw = _allTodos
+        .where((TodoItem t) => t.dueDate != null && _sameDay(t.dueDate!, day))
+        .toList();
+    final List<TodoItem> copy = List<TodoItem>.from(raw);
+    copy.sort((TodoItem a, TodoItem b) {
+      final int urgency = todoUrgencyRank(a).compareTo(todoUrgencyRank(b));
+      if (urgency != 0) {
+        return urgency;
+      }
+      return a.title.toLowerCase().compareTo(b.title.toLowerCase());
+    });
+    return copy;
+  }
 
   Set<int> _daysWithTodos(DateTime month) {
     final Set<int> days = <int>{};
@@ -83,24 +108,19 @@ final class _CalendarScreenState extends State<CalendarScreen> {
   }
 
   Color _dayDotColor(DateTime day) {
-    final todos = _todosForDay(day);
+    final List<TodoItem> todos = _todosForDay(day);
     if (todos.isEmpty) {
       return Colors.transparent;
     }
-    final bool anyOverdue = todos
-        .any((TodoItem t) => (t.dueDaysFromNow ?? 0) < 0 && !t.completed);
-    final bool anySoon = todos
-        .any((TodoItem t) => (t.dueDaysFromNow ?? 99) <= 2 && !t.completed);
-    if (anyOverdue || anySoon) {
-      return const Color(0xFFDC2626);
-    }
-    final bool anyWeek = todos
-        .any((TodoItem t) => (t.dueDaysFromNow ?? 99) <= 7 && !t.completed);
-    if (anyWeek) {
-      return const Color(0xFFD97706);
-    }
-    return AppColors.accent;
+    final TodoItem lead = todos.firstWhere(
+      (TodoItem t) => !t.completed,
+      orElse: () => todos.first,
+    );
+    return _listColors[lead.listId] ?? AppColors.accent;
   }
+
+  Color _listColorFor(TodoItem item) =>
+      _listColors[item.listId] ?? AppColors.accent;
 
   // ---------------------------------------------------------------------------
   // Build
@@ -108,11 +128,13 @@ final class _CalendarScreenState extends State<CalendarScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final AppThemePreset theme =
+        AppScope.read(context).themeNotifier.current;
     final selected = _todosForDay(_selected);
     final daysWithTodos = _daysWithTodos(_focusMonth);
 
     return Scaffold(
-      backgroundColor: AppColors.bg,
+      backgroundColor: theme.bg,
       body: SafeArea(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -258,7 +280,12 @@ final class _CalendarScreenState extends State<CalendarScreen> {
                       padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
                       itemCount: selected.length,
                       itemBuilder: (BuildContext ctx, int i) {
-                        return _CalTodoTile(item: selected[i]);
+                        final TodoItem item = selected[i];
+                        return _CalTodoTile(
+                          item: item,
+                          listColor: _listColorFor(item),
+                          c: theme,
+                        );
                       },
                     ),
             ),
@@ -506,33 +533,31 @@ class _CalendarGrid extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _CalTodoTile extends StatelessWidget {
-  const _CalTodoTile({required this.item});
+  const _CalTodoTile({
+    required this.item,
+    required this.listColor,
+    required this.c,
+  });
 
   final TodoItem item;
+  final Color listColor;
+  final AppThemePreset c;
 
   @override
   Widget build(BuildContext context) {
     final int? days = item.dueDaysFromNow;
-    final Color rowColor = item.completed
-        ? Colors.transparent
-        : days != null && days < 0
-            ? const Color(0xFFDC2626).withValues(alpha: 0.07)
-            : days != null && days <= 2
-                ? const Color(0xFFEA580C).withValues(alpha: 0.07)
-                : days != null && days <= 7
-                    ? const Color(0xFFD97706).withValues(alpha: 0.07)
-                    : Colors.transparent;
+    final Color fill = Color.lerp(c.card, listColor, item.completed ? 0.08 : 0.2)!;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       decoration: BoxDecoration(
-        color: rowColor == Colors.transparent ? Colors.white : rowColor,
+        color: fill,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.divider),
+        border: Border.all(color: listColor.withValues(alpha: 0.35)),
         boxShadow: <BoxShadow>[
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.03),
-            blurRadius: 4,
+            color: listColor.withValues(alpha: 0.08),
+            blurRadius: 6,
           ),
         ],
       ),
@@ -544,12 +569,12 @@ class _CalTodoTile extends StatelessWidget {
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             color: item.completed
-                ? AppColors.accent.withValues(alpha: 0.8)
+                ? listColor.withValues(alpha: 0.85)
                 : Colors.transparent,
             border: Border.all(
               color: item.completed
-                  ? AppColors.accent
-                  : AppColors.textSecondary.withValues(alpha: 0.3),
+                  ? listColor
+                  : listColor.withValues(alpha: 0.45),
               width: 1.5,
             ),
           ),
@@ -561,8 +586,8 @@ class _CalTodoTile extends StatelessWidget {
           item.title,
           style: TextStyle(
             color: item.completed
-                ? AppColors.textSecondary.withValues(alpha: 0.5)
-                : AppColors.textPrimary,
+                ? c.textSecondary.withValues(alpha: 0.5)
+                : c.textPrimary,
             fontSize: 14,
             decoration:
                 item.completed ? TextDecoration.lineThrough : TextDecoration.none,
@@ -580,14 +605,14 @@ class _CalTodoTile extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 11,
                   color: item.completed
-                      ? AppColors.textSecondary
+                      ? c.textSecondary
                       : days <= 0
                           ? const Color(0xFFDC2626)
                           : days <= 2
                               ? const Color(0xFFEA580C)
                               : days <= 7
                                   ? const Color(0xFFD97706)
-                                  : AppColors.textSecondary,
+                                  : listColor,
                 ),
               )
             : null,

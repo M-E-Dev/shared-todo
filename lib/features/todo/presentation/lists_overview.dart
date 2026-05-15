@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart'
     hide AuthException, AuthUser;
 
@@ -9,6 +10,7 @@ import '../../../app/theme/app_theme_preset.dart';
 import '../../../core/errors/app_exception.dart';
 import '../domain/shared_list.dart';
 import '../domain/todo_item.dart';
+import '../domain/todo_sort.dart';
 import 'list_detail_screen.dart';
 import 'list_settings_dialog.dart';
 
@@ -41,6 +43,14 @@ final class _ListsOverviewState extends State<ListsOverview> {
 
   /// Her listenin kaç satır göstereceği (satır sayısı = 1..8).
   final Map<String, int> _rowCounts = <String, int>{};
+
+  /// İçerik gizli (küçültülmüş) liste kimlikleri.
+  final Set<String> _collapsedIds = <String>{};
+
+  /// Kullanıcının sürükleyerek belirlediği liste sırası.
+  List<String> _listOrderIds = <String>[];
+
+  static const String _listOrderPrefsKey = 'overview_list_order';
 
   static const int _defaultRows = 4;
 
@@ -80,9 +90,80 @@ final class _ListsOverviewState extends State<ListsOverview> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _refresh();
-      _subscribeRealtime();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _loadListOrder();
+      if (mounted) {
+        unawaited(_refresh());
+        _subscribeRealtime();
+      }
+    });
+  }
+
+  Future<void> _loadListOrder() async {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    _listOrderIds = prefs.getStringList(_listOrderPrefsKey) ?? <String>[];
+  }
+
+  Future<void> _saveListOrder() async {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_listOrderPrefsKey, _listOrderIds);
+  }
+
+  List<SharedList> _orderedLists(List<SharedList> lists) {
+    if (_listOrderIds.isEmpty) {
+      return lists;
+    }
+    final Map<String, SharedList> byId = <String, SharedList>{
+      for (final SharedList l in lists) l.id: l,
+    };
+    final List<SharedList> ordered = <SharedList>[];
+    for (final String id in _listOrderIds) {
+      final SharedList? found = byId.remove(id);
+      if (found != null) {
+        ordered.add(found);
+      }
+    }
+    ordered.addAll(byId.values);
+    return ordered;
+  }
+
+  void _onReorderLists(int oldIndex, int newIndex) {
+    setState(() {
+      int target = newIndex;
+      if (oldIndex < target) {
+        target -= 1;
+      }
+      final SharedList moved = _lists.removeAt(oldIndex);
+      _lists.insert(target, moved);
+      _listOrderIds = _lists.map((SharedList l) => l.id).toList();
+    });
+    unawaited(_saveListOrder());
+  }
+
+  bool _isCollapsed(String listId) => _collapsedIds.contains(listId);
+
+  void _toggleCollapse(String listId) {
+    setState(() {
+      if (_collapsedIds.contains(listId)) {
+        _collapsedIds.remove(listId);
+      } else {
+        _collapsedIds.add(listId);
+      }
+    });
+  }
+
+  bool get _allCollapsed =>
+      _lists.isNotEmpty && _collapsedIds.length >= _lists.length;
+
+  void _toggleAllCollapse() {
+    setState(() {
+      if (_allCollapsed) {
+        _collapsedIds.clear();
+      } else {
+        _collapsedIds
+          ..clear()
+          ..addAll(_lists.map((SharedList l) => l.id));
+      }
     });
   }
 
@@ -144,7 +225,10 @@ final class _ListsOverviewState extends State<ListsOverview> {
 
       final map = <String, List<TodoItem>>{};
       for (int i = 0; i < lists.length; i++) {
-        map[lists[i].id] = _sorted(results[i], lists[i].sortDirection);
+        map[lists[i].id] = sortTodosByUrgencyThenDirection(
+          results[i],
+          lists[i].sortDirection,
+        );
       }
 
       // Rozet: bilinen listeler için son görülen değeri koru, yeniler için "görülmüş" say.
@@ -156,8 +240,21 @@ final class _ListsOverviewState extends State<ListsOverview> {
         ..clear()
         ..addAll(nextSeen);
 
+      final List<SharedList> ordered = _orderedLists(lists);
+      final List<String> knownIds = ordered.map((SharedList l) => l.id).toList();
+      if (_listOrderIds.isEmpty) {
+        _listOrderIds = List<String>.from(knownIds);
+      } else {
+        for (final String id in knownIds) {
+          if (!_listOrderIds.contains(id)) {
+            _listOrderIds.add(id);
+          }
+        }
+        _listOrderIds.removeWhere((String id) => !knownIds.contains(id));
+      }
+
       setState(() {
-        _lists = lists;
+        _lists = ordered;
         _todosMap = map;
         _busy = false;
       });
@@ -227,7 +324,10 @@ final class _ListsOverviewState extends State<ListsOverview> {
                 orElse: () => null,
               );
           if (list != null) {
-            _todosMap[e.key] = _sorted(e.value, list.sortDirection);
+            _todosMap[e.key] = sortTodosByUrgencyThenDirection(
+              e.value,
+              list.sortDirection,
+            );
           }
         }
       });
@@ -236,26 +336,6 @@ final class _ListsOverviewState extends State<ListsOverview> {
     } on Object catch (_) {
       // sessiz
     }
-  }
-
-  List<TodoItem> _sorted(List<TodoItem> raw, ListSortDirection dir) {
-    final copy = List<TodoItem>.from(raw);
-    switch (dir) {
-      case ListSortDirection.newestFirst:
-        copy.sort(
-          (TodoItem a, TodoItem b) => b.createdAt.compareTo(a.createdAt),
-        );
-      case ListSortDirection.oldestFirst:
-        copy.sort(
-          (TodoItem a, TodoItem b) => a.createdAt.compareTo(b.createdAt),
-        );
-      case ListSortDirection.titleAsc:
-        copy.sort(
-          (TodoItem a, TodoItem b) =>
-              a.title.toLowerCase().compareTo(b.title.toLowerCase()),
-        );
-    }
-    return copy;
   }
 
   // -----------------------------------------------------------------------
@@ -436,6 +516,9 @@ final class _ListsOverviewState extends State<ListsOverview> {
                   busy: _busy,
                   listCount: _lists.length,
                   onSettings: widget.onSettingsTap,
+                  allCollapsed: _allCollapsed,
+                  hasLists: _lists.isNotEmpty,
+                  onToggleAllCollapse: _toggleAllCollapse,
                   c: c,
                 ),
                 if (_error != null)
@@ -450,31 +533,39 @@ final class _ListsOverviewState extends State<ListsOverview> {
                           : RefreshIndicator(
                               color: c.accent,
                               onRefresh: _refresh,
-                              child: ListView.builder(
+                              child: ReorderableListView.builder(
                                 padding:
                                     const EdgeInsets.fromLTRB(16, 4, 16, 100),
+                                buildDefaultDragHandles: false,
                                 itemCount: _lists.length,
+                                onReorder: _onReorderLists,
                                 itemBuilder: (BuildContext ctx, int i) {
                                   final SharedList list = _lists[i];
                                   final List<TodoItem> todos =
                                       _todosMap[list.id] ?? <TodoItem>[];
+                                  final bool collapsed =
+                                      _isCollapsed(list.id);
                                   return Padding(
+                                    key: ValueKey<String>(list.id),
                                     padding:
                                         const EdgeInsets.only(bottom: 14),
                                     child: _ListCard(
-                                      key: ValueKey<String>(list.id),
                                       list: list,
+                                      listIndex: i,
                                       todos: todos,
                                       rowCount: _rowsFor(list.id),
                                       badgeCount: _pendingBadges[list.id] ?? 0,
+                                      collapsed: collapsed,
                                       c: c,
                                       cardOpacity: AppScope.read(context)
                                           .themeNotifier
                                           .effectiveCardOpacity,
                                       onTap: () => _openDetail(list),
                                       onSettings: () => _openSettings(list),
-                                      onLongPress: () =>
+                                      onResizeLongPress: () =>
                                           _showRowPicker(list),
+                                      onToggleCollapse: () =>
+                                          _toggleCollapse(list.id),
                                     ),
                                   );
                                 },
@@ -510,6 +601,9 @@ class _Header extends StatelessWidget {
     required this.busy,
     required this.listCount,
     required this.onSettings,
+    required this.allCollapsed,
+    required this.hasLists,
+    required this.onToggleAllCollapse,
     required this.c,
   });
 
@@ -517,6 +611,9 @@ class _Header extends StatelessWidget {
   final bool busy;
   final int listCount;
   final VoidCallback onSettings;
+  final bool allCollapsed;
+  final bool hasLists;
+  final VoidCallback onToggleAllCollapse;
   final AppThemePreset c;
 
   @override
@@ -567,6 +664,26 @@ class _Header extends StatelessWidget {
               child: CircularProgressIndicator(
                 strokeWidth: 2,
                 color: c.accent,
+              ),
+            ),
+          if (hasLists)
+            TextButton.icon(
+              onPressed: onToggleAllCollapse,
+              icon: Icon(
+                allCollapsed
+                    ? Icons.unfold_more_rounded
+                    : Icons.unfold_less_rounded,
+                size: 18,
+                color: c.textSecondary,
+              ),
+              label: Text(
+                allCollapsed ? 'Tümünü aç' : 'Tümünü küçült',
+                style: TextStyle(color: c.textSecondary, fontSize: 12),
+              ),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
             ),
           IconButton(
@@ -683,230 +800,215 @@ final class _CompactFabState extends State<_CompactFab> {
 class _ListCard extends StatelessWidget {
   const _ListCard({
     required this.list,
+    required this.listIndex,
     required this.todos,
     required this.rowCount,
     required this.badgeCount,
+    required this.collapsed,
     required this.c,
     required this.cardOpacity,
     required this.onTap,
     required this.onSettings,
-    required this.onLongPress,
-    super.key,
+    required this.onResizeLongPress,
+    required this.onToggleCollapse,
   });
 
   final SharedList list;
+  final int listIndex;
   final List<TodoItem> todos;
   final int rowCount;
-  final int badgeCount; // 0 = rozet yok
+  final int badgeCount;
+  final bool collapsed;
   final AppThemePreset c;
-  final double cardOpacity; // 0.30 - 1.0
+  final double cardOpacity;
   final VoidCallback onTap;
   final VoidCallback onSettings;
-  final VoidCallback onLongPress;
+  final VoidCallback onResizeLongPress;
+  final VoidCallback onToggleCollapse;
 
-  // Bir satır yüksekliği
   static const double _rowH = 40.0;
   static const double _headerH = 48.0;
-  static const double _footerH = 34.0;
 
-  double get _totalHeight => _headerH + rowCount * _rowH + _footerH;
+  double get _totalHeight =>
+      collapsed ? _headerH : _headerH + rowCount * _rowH;
 
   @override
   Widget build(BuildContext context) {
     final Color accent = list.color;
     final int done = todos.where((TodoItem t) => t.completed).length;
+    final Color cardFill = Color.lerp(c.card, accent, 0.22)!
+        .withValues(alpha: cardOpacity);
 
-    return GestureDetector(
-      onTap: onTap,
-      onLongPress: onLongPress,
-      child: Container(
-        height: _totalHeight,
-        decoration: BoxDecoration(
-          color: c.card.withValues(alpha: cardOpacity),
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: <BoxShadow>[
-            BoxShadow(
-              color: accent.withValues(alpha: 0.10),
-              blurRadius: 14,
-              offset: const Offset(0, 4),
-            ),
-            const BoxShadow(
-              color: Color(0x08000000),
-              blurRadius: 4,
-              offset: Offset(0, 1),
-            ),
-          ],
-        ),
-        clipBehavior: Clip.hardEdge,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[
-            // Renkli üst çizgi
-            Container(height: 4, color: accent),
-            // Başlık
-            SizedBox(
-              height: _headerH - 4,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(14, 0, 6, 0),
-                child: Row(
-                  children: <Widget>[
-                    Container(
-                      width: 8,
-                      height: 8,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: accent,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        list.title,
-                        style: TextStyle(
-                          color: c.textPrimary,
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    // Bildirim rozeti
-                    if (badgeCount > 0)
-                      Container(
-                        margin: const EdgeInsets.only(right: 4),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 7,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFDC2626),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Text(
-                          '+$badgeCount',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold,
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          height: _totalHeight,
+          decoration: BoxDecoration(
+            color: cardFill,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: accent.withValues(alpha: 0.18)),
+            boxShadow: <BoxShadow>[
+              BoxShadow(
+                color: accent.withValues(alpha: 0.12),
+                blurRadius: 14,
+                offset: const Offset(0, 4),
+              ),
+              const BoxShadow(
+                color: Color(0x08000000),
+                blurRadius: 4,
+                offset: Offset(0, 1),
+              ),
+            ],
+          ),
+          clipBehavior: Clip.hardEdge,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              SizedBox(
+                height: _headerH,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(4, 0, 4, 0),
+                  child: Row(
+                    children: <Widget>[
+                      ReorderableDragStartListener(
+                        index: listIndex,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                          child: Icon(
+                            Icons.drag_handle_rounded,
+                            color: c.textSecondary.withValues(alpha: 0.55),
+                            size: 20,
                           ),
                         ),
                       ),
-                    if (todos.isNotEmpty)
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 7,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: accent.withValues(alpha: 0.10),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
+                      Expanded(
                         child: Text(
-                          '$done/${todos.length}',
+                          list.title,
                           style: TextStyle(
-                            color: accent,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
+                            color: c.textPrimary,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
                           ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
-                    IconButton(
-                      icon: Icon(
-                        Icons.tune_rounded,
-                        color: c.textSecondary.withValues(alpha: 0.6),
-                        size: 17,
+                      if (badgeCount > 0)
+                        Container(
+                          margin: const EdgeInsets.only(right: 4),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 7,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFDC2626),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text(
+                            '+$badgeCount',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      if (todos.isNotEmpty)
+                        Container(
+                          margin: const EdgeInsets.only(right: 4),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 7,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: accent.withValues(alpha: 0.14),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            '$done/${todos.length}',
+                            style: TextStyle(
+                              color: accent,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      TextButton.icon(
+                        onPressed: onToggleCollapse,
+                        icon: Icon(
+                          collapsed
+                              ? Icons.expand_more_rounded
+                              : Icons.expand_less_rounded,
+                          size: 16,
+                          color: c.textSecondary,
+                        ),
+                        label: Text(
+                          collapsed ? 'Aç' : 'Küçült',
+                          style: TextStyle(
+                            color: c.textSecondary,
+                            fontSize: 11,
+                          ),
+                        ),
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
                       ),
-                      onPressed: onSettings,
-                      padding: const EdgeInsets.all(6),
-                      constraints:
-                          const BoxConstraints(minWidth: 30, minHeight: 30),
-                      tooltip: 'Ayarlar',
-                    ),
-                  ],
+                      IconButton(
+                        icon: Icon(
+                          Icons.tune_rounded,
+                          color: c.textSecondary.withValues(alpha: 0.6),
+                          size: 17,
+                        ),
+                        onPressed: onSettings,
+                        padding: const EdgeInsets.all(6),
+                        constraints: const BoxConstraints(
+                          minWidth: 30,
+                          minHeight: 30,
+                        ),
+                        tooltip: 'Ayarlar',
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
-            Divider(height: 1, thickness: 1, color: c.divider),
-            // Todo satırları — tam yükseklikte kaydırılabilir
-            Expanded(
-              child: todos.isEmpty
-                  ? Center(
-                      child: Text(
-                        'Görev yok — dokun ekle',
-                        style: TextStyle(
-                          color: c.textSecondary.withValues(alpha: 0.6),
-                          fontSize: 12,
-                        ),
-                      ),
-                    )
-                  : ListView.builder(
-                      physics: const ClampingScrollPhysics(),
-                      padding: const EdgeInsets.symmetric(vertical: 2),
-                      itemCount: todos.length,
-                      itemBuilder: (BuildContext ctx, int i) {
-                        return _MiniTodoRow(
-                          item: todos[i],
-                          accent: accent,
-                          height: _rowH,
-                        );
-                      },
-                    ),
-            ),
-            // Alt çubuk
-            Container(
-              height: _footerH,
-              decoration: BoxDecoration(
-                border: Border(top: BorderSide(color: c.divider)),
-              ),
-              padding: const EdgeInsets.symmetric(horizontal: 14),
-              child: Row(
-                children: <Widget>[
-                  Icon(
-                    Icons.open_in_new_rounded,
-                    size: 11,
-                    color: c.textSecondary,
+              if (!collapsed) ...<Widget>[
+                Divider(height: 1, thickness: 1, color: c.divider),
+                Expanded(
+                  child: GestureDetector(
+                    onLongPress: onResizeLongPress,
+                    behavior: HitTestBehavior.opaque,
+                    child: todos.isEmpty
+                        ? Center(
+                            child: Text(
+                              'Görev yok — dokun ekle',
+                              style: TextStyle(
+                                color: c.textSecondary.withValues(alpha: 0.6),
+                                fontSize: 12,
+                              ),
+                            ),
+                          )
+                        : ListView.builder(
+                            physics: const ClampingScrollPhysics(),
+                            padding: const EdgeInsets.symmetric(vertical: 2),
+                            itemCount: todos.length,
+                            itemBuilder: (BuildContext ctx, int i) {
+                              return _MiniTodoRow(
+                                item: todos[i],
+                                accent: accent,
+                                height: _rowH,
+                              );
+                            },
+                          ),
                   ),
-                  const SizedBox(width: 4),
-                  Text(
-                    'Detay',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: c.textSecondary,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Icon(
-                    Icons.straighten_rounded,
-                    size: 11,
-                    color: c.textSecondary,
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    'Bas & boyutlandır',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: c.textSecondary,
-                    ),
-                  ),
-                  const Spacer(),
-                  Icon(
-                    Icons.sort_rounded,
-                    size: 11,
-                    color: c.textSecondary.withValues(alpha: 0.6),
-                  ),
-                  const SizedBox(width: 3),
-                  Text(
-                    list.sortDirection.label,
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: c.textSecondary.withValues(alpha: 0.6),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
+                ),
+              ],
+            ],
+          ),
         ),
       ),
     );

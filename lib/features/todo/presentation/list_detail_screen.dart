@@ -6,6 +6,7 @@ import '../../../app/app_scope.dart';
 import '../../../core/errors/app_exception.dart';
 import '../domain/shared_list.dart';
 import '../domain/todo_item.dart';
+import '../domain/todo_sort.dart';
 import 'list_settings_dialog.dart';
 import '../../../app/theme/app_colors.dart';
 
@@ -40,25 +41,8 @@ final class _ListDetailScreenState extends State<ListDetailScreen> {
   int _pendingNotifyCount = 0;
   Timer? _notifyDebounce;
 
-  List<TodoItem> _applySort(List<TodoItem> raw) {
-    final List<TodoItem> copy = List<TodoItem>.from(raw);
-    switch (_list.sortDirection) {
-      case ListSortDirection.newestFirst:
-        copy.sort(
-          (TodoItem a, TodoItem b) => b.createdAt.compareTo(a.createdAt),
-        );
-      case ListSortDirection.oldestFirst:
-        copy.sort(
-          (TodoItem a, TodoItem b) => a.createdAt.compareTo(b.createdAt),
-        );
-      case ListSortDirection.titleAsc:
-        copy.sort(
-          (TodoItem a, TodoItem b) =>
-              a.title.toLowerCase().compareTo(b.title.toLowerCase()),
-        );
-    }
-    return copy;
-  }
+  List<TodoItem> _applySort(List<TodoItem> raw) =>
+      sortTodosByUrgencyThenDirection(raw, _list.sortDirection);
 
   @override
   void initState() {
